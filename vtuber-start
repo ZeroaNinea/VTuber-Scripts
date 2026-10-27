@@ -14,13 +14,41 @@ fi
 
 # Launch OpenSeeFace using its existing virtual environment.
 (
-    cd "$OPENSEEFACE"
+    cd "$OPENSEEFACE" || exit 1
     source .venv/bin/activate
+
+    # Find the current index of the virtual sink's monitor.
+    AUDIO_DEVICE="$(python3 - <<'PY'
+import sounddevice as sd
+import sys
+
+matches = [
+    (i, device)
+    for i, device in enumerate(sd.query_devices())
+    if device["name"] == "mouthtrack.monitor"
+    and device["max_input_channels"] > 0
+]
+
+if len(matches) != 1:
+    print(
+        f"Expected exactly one mouthtrack.monitor input, "
+        f"found {len(matches)}.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+index, device = matches[0]
+print(index)
+PY
+    )" || exit 1
+
+    echo "Using mouthtrack.monitor (device $AUDIO_DEVICE)"
+
     exec python3 facetracker.py \
-      --audio-mouth \
-      --audio-threshold 0.12 \
-      --audio-max-level 10 \
-      --audio-device 23
+        --audio-mouth \
+        --audio-threshold 0.12 \
+        --audio-max-level 10 \
+        --audio-device "$AUDIO_DEVICE"
 ) &
 
 # Launch Inochi Session.
