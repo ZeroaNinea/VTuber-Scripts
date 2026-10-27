@@ -1,23 +1,102 @@
 #!/usr/bin/env bash
 
-set -e
+set -o pipefail
 
 OPENSEEFACE="$HOME/Applications/OpenSeeFace"
 INOCHI_SESSION="$HOME/Applications/inochi-session-linux/inochi-session"
 
-# Create the virtual audio sink if it doesn't exist.
-if ! pactl list short sinks | awk '{print $2}' | grep -qx 'mouthtrack'; then
-    pactl load-module module-null-sink \
-        sink_name=mouthtrack \
-        sink_properties=device.description=MouthTrack >/dev/null
+PIDS=()
+MODULE_ID=""
+CLEANUP_MODULE=0
+
+
+# Stop the applications and remove the virtual audio sink.
+cleanup() {
+    local exit_status=$?
+
+    # Prevent cleanup from running more than once.
+    trap - EXIT INT TERM HUP
+
+    echo
+    echo "Stopping VTuber setup..."
+
+    # Ask all applications started by this script to exit.
+    for pid in "${PIDS[@]}"; do
+        kill -TERM "$pid" 2>/dev/null || true
+    done
+
+    # Give applications time to close gracefully.
+    sleep 2
+
+    # Force-stop any tracked processes that haven't exited.
+    for pid in "${PIDS[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+    done
+
+    # Reap the background processes.
+    for pid in "${PIDS[@]}"; do
+        wait "$pid" 2>/dev/null || true
+    done
+
+    # Remove the virtual audio sink's module.
+    if [[ "$CLEANUP_MODULE" -eq 1 && -n "$MODULE_ID" ]]; then
+        if pactl unload-module "$MODULE_ID"; then
+            echo "Removed the MouthTrack virtual audio sink."
+        else
+            echo "Warning: Could not unload the MouthTrack module."
+        fi
+    fi
+
+    echo "VTuber setup stopped."
+    return "$exit_status"
+}
+
+
+# Handle Ctrl+C and termination signals.
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+
+# Find an existing MouthTrack virtual sink module, if any.
+MODULE_ID="$(
+    pactl list short modules |
+        awk '$2 == "module-null-sink" &&
+             $0 ~ /sink_name=mouthtrack([[:space:]]|$)/ {
+                 print $1
+                 exit
+             }'
+)" || exit 1
+
+if [[ -n "$MODULE_ID" ]]; then
+    # Reuse the dedicated sink left over from an earlier run.
+    CLEANUP_MODULE=1
+    echo "Reusing existing MouthTrack module $MODULE_ID."
+else
+    # Create the virtual audio sink.
+    MODULE_ID="$(
+        pactl load-module module-null-sink \
+            sink_name=mouthtrack \
+            sink_properties=device.description=MouthTrack
+    )" || {
+        echo "Error: Could not create the MouthTrack audio sink." >&2
+        exit 1
+    }
+
+    CLEANUP_MODULE=1
+    echo "Created MouthTrack module $MODULE_ID."
 fi
+
 
 # Launch OpenSeeFace using its existing virtual environment.
 (
     cd "$OPENSEEFACE" || exit 1
     source .venv/bin/activate
 
-    # Find the current index of the virtual sink's monitor.
+    # Find the current index of mouthtrack.monitor.
     AUDIO_DEVICE="$(python3 - <<'PY'
 import sounddevice as sd
 import sys
@@ -37,7 +116,7 @@ if len(matches) != 1:
     )
     sys.exit(1)
 
-index, device = matches[0]
+index, _ = matches[0]
 print(index)
 PY
     )" || exit 1
@@ -51,10 +130,23 @@ PY
         --audio-device "$AUDIO_DEVICE"
 ) &
 
+PIDS+=("$!")
+
+
 # Launch Inochi Session.
 "$INOCHI_SESSION" &
+PIDS+=("$!")
+
 
 # Launch OBS Studio.
 obs &
+PIDS+=("$!")
 
-echo "VTubing applications launched."
+
+echo
+echo "VTuber applications launched!"
+echo "Press Ctrl+C in this terminal to stop everything."
+echo
+
+# Keep this script running while the applications are open.
+wait
