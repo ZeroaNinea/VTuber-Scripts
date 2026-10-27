@@ -2,6 +2,7 @@
 This repository contains automatic scripts for opening and clothing my VTuber tools.
 
 Place the scripts in the `~/bin` directory of your silly Linux device!
+<br />
 \>:3
 
 ## Launch the Scripts
