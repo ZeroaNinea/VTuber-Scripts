@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+set -e
+
+OPENSEEFACE="$HOME/Applications/OpenSeeFace"
+INOCHI_SESSION="$HOME/Applications/inochi-session-linux/inochi-session"
+
+# Create the virtual audio sink if it doesn't exist.
+if ! pactl list short sinks | awk '{print $2}' | grep -qx 'mouthtrack'; then
+    pactl load-module module-null-sink \
+        sink_name=mouthtrack \
+        sink_properties=device.description=MouthTrack >/dev/null
+fi
+
+# Launch OpenSeeFace using its existing virtual environment.
+(
+    cd "$OPENSEEFACE"
+    source .venv/bin/activate
+    exec python3 facetracker.py \
+      --audio-mouth \
+      --audio-threshold 0.12 \
+      --audio-max-level 10 \
+      --audio-device 23
+) &
+
+# Launch Inochi Session.
+"$INOCHI_SESSION" &
+
+# Launch OBS Studio.
+obs &
+
+echo "VTubing applications launched."
